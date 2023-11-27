@@ -11,8 +11,8 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 	//@@ Insert code to implement matrix multiplication here
 	//@@ You have to use shared memory for this MP
     // printf("!\n");
-	__shared__ float MM[BLOCK_SIZE][BLOCK_SIZE];
-	__shared__ float NN[BLOCK_SIZE][BLOCK_SIZE];
+	// __shared__ float MM[BLOCK_SIZE][BLOCK_SIZE];
+	// __shared__ float NN[BLOCK_SIZE][BLOCK_SIZE];
 
 
     const int H_out = (H - K)/S + 1;
@@ -32,14 +32,14 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 	int tx = threadIdx.x; int ty = threadIdx.y; int tz = threadIdx.z;
 
 	int Row = bx * BLOCK_SIZE + tx;
-	int Col = (by * BLOCK_SIZE + ty) / B;
+	int Col = (by * BLOCK_SIZE + ty) % M;
 
-	int b = (by * BLOCK_SIZE + ty) % B;
+	int b = (by * BLOCK_SIZE + ty) / M;
     int m = Col;
 
     
     // without using shared memory
-    if( Row < numARows && Col < numBColumns) {
+    if( Row < numARows && Col < numBColumns && (by * BLOCK_SIZE + ty) < M * B) {
 
         out_4d(b, m , Row / W_out , Row % W_out) = 0;
         
