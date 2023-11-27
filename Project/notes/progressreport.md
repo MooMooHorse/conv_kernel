@@ -14,7 +14,7 @@ See README.md in the project root directory.
   
 This involves several steps
 
-1. Input matrix unrolling
+1. Input matrix unrolling 
 
 2. Invoke Tensor Core
 

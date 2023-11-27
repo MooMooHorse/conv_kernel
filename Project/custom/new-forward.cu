@@ -4,9 +4,119 @@
 
 #define BLOCK_SIZE 16
 
+#define IMPL_BASELINE               0
+#define IMPL_UNROLLING              1
+#define IMPL_SHARED_UNROLLING       2
+
+#define CUR_VERSION  IMPL_SHARED_UNROLLING
+
 #define IS_TEST_1(B,M,C,H,W,K,S)  (B==1 && M == 3 && C == 3 && H == 224 && W == 224 && K == 3 && S == 1)
 
-__global__ void conv_forward_kernel(float *output, const float *input, const float *mask, 
+
+#if (CUR_VERSION == IMPL_SHARED_UNROLLING)
+
+__global__ void conv_forward_kernel_unrolling_shared(float *output, const float *input, const float *mask, 
+    const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
+	//@@ Insert code to implement matrix multiplication here
+	//@@ You have to use shared memory for this MP
+    // printf("!\n");
+	__shared__ float MM[BLOCK_SIZE][BLOCK_SIZE];
+	__shared__ float NN[BLOCK_SIZE][BLOCK_SIZE];
+
+
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+
+    int numARows = H_out * W_out * B;
+    int numAColumns = C * K * K;
+    int numBRows = C * K * K;
+    int numBColumns = M;
+    // int numCRows = numARows;
+    // int numCColumns = numBColumns;
+
+    #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+
+
+	int bx = blockIdx.x; int by = blockIdx.y ; int bz = blockIdx.z;
+	int tx = threadIdx.x; int ty = threadIdx.y; int tz = threadIdx.z;
+
+	int Row = bx * BLOCK_SIZE + tx;
+	int Col = by * BLOCK_SIZE + ty;
+
+	int b = (bx * BLOCK_SIZE + tx) / (H_out * W_out);
+    int m = Col;
+    int h = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) / W_out;
+    int w = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) % W_out;
+
+
+    float Pvalue = 0;
+    for(int kk = 0; kk < (numAColumns - 1) / BLOCK_SIZE + 1; kk++) {
+        const float* AA = input;
+        const float* BB = mask;
+
+        if(kk * BLOCK_SIZE + ty < numAColumns && Row < numARows)
+            MM[tx][ty] = AA[Row * numAColumns + kk * BLOCK_SIZE + ty];
+        else
+            MM[tx][ty] = 0.0;
+
+        if(kk * BLOCK_SIZE + tx < numBRows && Col < numBColumns)
+            NN[tx][ty] = BB[(kk * BLOCK_SIZE + tx) * numBColumns + Col];
+        else
+            NN[tx][ty] = 0.0;
+
+        __syncthreads(); // we first wait until the two blocks are loaded
+        // this can be optimized using tensor core
+
+        for(int k = 0; k < BLOCK_SIZE; ++k)
+            Pvalue += MM[tx][k] * NN[k][ty];
+
+        __syncthreads();
+    }
+
+    if(Row < numARows && Col < numBColumns) {
+        out_4d(b, m , h, w) = Pvalue;
+    }
+	
+    #undef out_4d
+}
+
+__global__ void im2col_kernel(float* output, const float *input, float* mask_o, const float* mask_i,
+                    const int B, const int M, const int C, const int H, 
+                    const int W, const int K,const int S) {
+    
+    #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    #define out_6d(i5, i4, i3, i2, i1, i0) output[ \
+        (i5) * C * K * K * ((H - K)/S + 1)*((W - K)/S + 1) + \
+        (i4) * (C * K * K *((W - K)/S + 1)) + \
+        (i3) * (C * K * K ) + \
+        (i2) * K * K + \
+        (i1) * K + \
+        (i0) \
+    ]
+    #define old_mask_4d(i3, i2, i1, i0) mask_i[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+    #define mask_4d(i3, i2, i1, i0) mask_o[(i3) * (K * K * M) + (i2) * (K * M) + (i1) * (M) + i0]
+
+    int bx = blockIdx.x; int by = blockIdx.y ; 
+    int tx = threadIdx.x; int ty = threadIdx.y; 
+
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+
+    int b = (bx * BLOCK_SIZE + tx) / (H_out * W_out);
+    int h = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) / W_out;
+    int w = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) % W_out;
+
+    int m = (by * BLOCK_SIZE + ty) / (K * K * C);
+    int c = ((by * BLOCK_SIZE + ty) % (K * K * C)) / (K * K);
+    int p = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) / K;
+    int q = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) % K;
+
+    out_6d(b, h, w, c, p, q) = in_4d(b, c, h * S + p, w * S + q);
+    mask_4d(c, p, q, m) = old_mask_4d(m, c, p, q);
+}
+
+#elif (CUR_VERSION == IMPL_UNROLLING)
+__global__ void conv_forward_kernel_unrolling(float *output, const float *input, const float *mask, 
     const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
 	//@@ Insert code to implement matrix multiplication here
 	//@@ You have to use shared memory for this MP
@@ -52,39 +162,8 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
         out_4d(b, m , h, w) = Pvalue;
 
     }
-
-    // if(Row < numARows && Col < numBColumns) {
-    //     float Pvalue = 0;
-    //     for(int kk = 0; kk < (numAColumns - 1) / BLOCK_SIZE + 1; kk++) {
-    //         const float* AA = input;
-    //         const float* BB = mask;
-
-    //         if(kk * BLOCK_SIZE + ty < numAColumns)
-    //             MM[tx][ty] = AA[Row * numAColumns + kk * BLOCK_SIZE + ty];
-    //         else
-    //             MM[tx][ty] = 0.0;
-
-    //         if(kk * BLOCK_SIZE + tx < numBRows)
-    //             NN[tx][ty] = BB[(kk * BLOCK_SIZE + tx) * numBColumns + Col];
-    //         else
-    //             NN[tx][ty] = 0.0;
-
-    //         __syncthreads(); // we first wait until the two blocks are loaded
-    //         // this can be optimized using tensor core
-
-    //         for(int k = 0; k < BLOCK_SIZE; ++k)
-    //             Pvalue += MM[tx][k] * NN[k][ty];
-
-    //         __syncthreads();
-    //     }
-
-    //     out_4d(b, m , h, w) = Pvalue;
-
-    // }
-	
     #undef out_4d
 }
-
 /**
  * Unroll the input matrix to have K*K*C columns and w_out*h_out rows
  * 
@@ -126,12 +205,6 @@ static void im2col(float* output, const float *input, float* mask_o, const float
             }
         }
     }
-    // if(IS_TEST_1(B,M,C,H,W,K,S)) {
-    //     if(out_6d(0, 0, 16, 0, 1,2)) {
-    //         printf("out_6d(%d, %d, %d, %d, %d, %d) = %f\n", 
-    //             0, 0, 16, 0, 1,2, out_6d(0, 0, 16, 0, 1,2));
-    //     }
-    // }
 
     // re-oraganize the mask
     for (int m = 0; m < M; m++) {
@@ -149,6 +222,12 @@ static void im2col(float* output, const float *input, float* mask_o, const float
     #undef mask_4d
     #undef old_mask_4d
 }
+#endif
+
+
+
+
+
 
 
 
@@ -215,17 +294,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc(&device_unroll_mask, M * C * K * K * sizeof(float));
     cudaMalloc(&device_unroll_input, B * C * K * K * H_out * W_out * sizeof(float));
     
-    im2col(host_unroll_input, host_input, host_unroll_mask, host_mask, B, M, C, H, W, K, S);
+    // im2col(host_unroll_input, host_input, host_unroll_mask, host_mask, B, M, C, H, W, K, S);
 
-    // if(IS_TEST_1(B,M,C,H,W,K,S)) {
-    //     for(int i = 0; i < 20; i++) {
-    //         printf("host_unroll_input[%d] = %f\n", i, host_unroll_input[i]);
-    //     }
-    //     for(int i = 0; i < 20; i++) {
-    //         printf("host_unroll_mask[%d] = %f\n", i, host_unroll_mask[i]);
-    //     }
-    // }
-
+    cudaDeviceSynchronize();
 
     
     cudaMemcpy(device_unroll_input, host_unroll_input, B * C * K * K * H_out * W_out * sizeof(float), cudaMemcpyHostToDevice);
@@ -262,7 +333,8 @@ const float *device_mask, const int B, const int M, const int C, const int H, co
 
     
 
-    conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+    conv_forward_kernel_unrolling<<<dimGrid, dimBlock>>>(device_output, device_input, 
+        device_mask, B, M, C, H, W, K, S);
 
     cudaDeviceSynchronize();
 
