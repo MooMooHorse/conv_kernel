@@ -11,14 +11,14 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 	//@@ Insert code to implement matrix multiplication here
 	//@@ You have to use shared memory for this MP
     // printf("!\n");
-	// __shared__ float MM[BLOCK_SIZE][BLOCK_SIZE];
-	// __shared__ float NN[BLOCK_SIZE][BLOCK_SIZE];
+	__shared__ float MM[BLOCK_SIZE][BLOCK_SIZE];
+	__shared__ float NN[BLOCK_SIZE][BLOCK_SIZE];
 
 
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
 
-    int numARows = H_out * W_out;
+    int numARows = H_out * W_out * B;
     int numAColumns = C * K * K;
     int numBRows = C * K * K;
     int numBColumns = M;
@@ -32,55 +32,56 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 	int tx = threadIdx.x; int ty = threadIdx.y; int tz = threadIdx.z;
 
 	int Row = bx * BLOCK_SIZE + tx;
-	int Col = (by * BLOCK_SIZE + ty) % M;
+	int Col = by * BLOCK_SIZE + ty;
 
-	int b = (by * BLOCK_SIZE + ty) / M;
+	int b = (bx * BLOCK_SIZE + tx) / (H_out * W_out);
     int m = Col;
+    int h = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) / W_out;
+    int w = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) % W_out;
 
     
     // without using shared memory
-    if( Row < numARows && Col < numBColumns && (by * BLOCK_SIZE + ty) < M * B) {
+    if( Row < numARows && Col < numBColumns) {
 
-        out_4d(b, m , Row / W_out , Row % W_out) = 0;
-        
         float Pvalue = 0;
         for(int k = 0; k < numAColumns; k++) {
-            const float* A = input  + b * numAColumns * numARows;
-            const float* B = mask;
-            Pvalue += A[Row * numAColumns + k] * B[k * numBColumns + Col];
+            const float* AA = input;
+            const float* BB = mask;
+            Pvalue += AA[Row * numAColumns + k] * BB[k * numBColumns + Col];
         }
-        out_4d(b, m , Row / W_out , Row % W_out) = Pvalue;
+        out_4d(b, m , h, w) = Pvalue;
+
     }
 
-    
-	// float Pvalue = 0;
-	// for(int kk = 0; kk < (numAColumns - 1) / BLOCK_SIZE + 1; kk++) {
-    //     const float* AA = input + b * numAColumns * numARows;
-    //     const float* BB = mask;
+    // if(Row < numARows && Col < numBColumns) {
+    //     float Pvalue = 0;
+    //     for(int kk = 0; kk < (numAColumns - 1) / BLOCK_SIZE + 1; kk++) {
+    //         const float* AA = input;
+    //         const float* BB = mask;
 
-	// 	if(Row < numARows && kk * BLOCK_SIZE + ty < numAColumns)
-	// 		MM[tx][ty] = AA[Row * numAColumns + kk * BLOCK_SIZE + ty];
-	// 	else
-	// 		MM[tx][ty] = 0.0;
+    //         if(kk * BLOCK_SIZE + ty < numAColumns)
+    //             MM[tx][ty] = AA[Row * numAColumns + kk * BLOCK_SIZE + ty];
+    //         else
+    //             MM[tx][ty] = 0.0;
 
-	// 	if(kk * BLOCK_SIZE + tx < numBRows && (by * BLOCK_SIZE + ty) < M * B)
-	// 		NN[tx][ty] = BB[(kk * BLOCK_SIZE + tx) * numBColumns + Col];
-	// 	else
-	// 		NN[tx][ty] = 0.0;
+    //         if(kk * BLOCK_SIZE + tx < numBRows)
+    //             NN[tx][ty] = BB[(kk * BLOCK_SIZE + tx) * numBColumns + Col];
+    //         else
+    //             NN[tx][ty] = 0.0;
 
-	// 	__syncthreads(); // we first wait until the two blocks are loaded
-    //     // this can be optimized using tensor core
+    //         __syncthreads(); // we first wait until the two blocks are loaded
+    //         // this can be optimized using tensor core
 
-	// 	for(int k = 0; k < BLOCK_SIZE; ++k)
-	// 		Pvalue += MM[tx][k] * NN[k][ty];
+    //         for(int k = 0; k < BLOCK_SIZE; ++k)
+    //             Pvalue += MM[tx][k] * NN[k][ty];
 
-	// 	__syncthreads();
-	// }
+    //         __syncthreads();
+    //     }
 
-	// if(Row < numARows && (by * BLOCK_SIZE + ty) < M * B) {
-    // 	out_4d(b, m , Row / W_out , Row % W_out) = Pvalue;
+    //     out_4d(b, m , h, w) = Pvalue;
+
     // }
-
+	
     #undef out_4d
 }
 
@@ -252,7 +253,7 @@ const float *device_mask, const int B, const int M, const int C, const int H, co
     const int H_out = (H - K) / S + 1;
     const int W_out = (W - K) / S + 1;
     // printf("%d %d\n", H_out, W_out);
-    dim3 dimGrid(ceil(1.0 * H_out * W_out / BLOCK_SIZE), B * ceil(1.0 * M / BLOCK_SIZE), 1);
+    dim3 dimGrid(ceil(1.0 * H_out * W_out * B / BLOCK_SIZE), ceil(1.0 * M / BLOCK_SIZE), 1);
     
     dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE, 1);
 
