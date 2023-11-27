@@ -106,7 +106,40 @@ __global__ void im2col_kernel(float* output, const float *input, float* mask_o, 
     int h = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) / W_out;
     int w = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) % W_out;
 
+    int m = (by * BLOCK_SIZE + ty) / (K * K * C);__global__ void im2col_kernel(float* output, const float *input, float* mask_o, const float* mask_i,
+                    const int B, const int M, const int C, const int H, 
+                    const int W, const int K,const int S) {
+    
+    #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    #define out_6d(i5, i4, i3, i2, i1, i0) output[ \
+        (i5) * C * K * K * ((H - K)/S + 1)*((W - K)/S + 1) + \
+        (i4) * (C * K * K *((W - K)/S + 1)) + \
+        (i3) * (C * K * K ) + \
+        (i2) * K * K + \
+        (i1) * K + \
+        (i0) \
+    ]
+    #define old_mask_4d(i3, i2, i1, i0) mask_i[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+    #define mask_4d(i3, i2, i1, i0) mask_o[(i3) * (K * K * M) + (i2) * (K * M) + (i1) * (M) + i0]
+
+    int bx = blockIdx.x; int by = blockIdx.y ; 
+    int tx = threadIdx.x; int ty = threadIdx.y; 
+
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+
+    int b = (bx * BLOCK_SIZE + tx) / (H_out * W_out);
+    int h = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) / W_out;
+    int w = ((bx * BLOCK_SIZE + tx) % (W_out * H_out)) % W_out;
+
     int m = (by * BLOCK_SIZE + ty) / (K * K * C);
+    int c = ((by * BLOCK_SIZE + ty) % (K * K * C)) / (K * K);
+    int p = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) / K;
+    int q = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) % K;
+
+    out_6d(b, h, w, c, p, q) = in_4d(b, c, h * S + p, w * S + q);
+    mask_4d(c, p, q, m) = old_mask_4d(m, c, p, q);
+}
     int c = ((by * BLOCK_SIZE + ty) % (K * K * C)) / (K * K);
     int p = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) / K;
     int q = ((by * BLOCK_SIZE + ty) % (K * K * C)) % (K * K) % K;
