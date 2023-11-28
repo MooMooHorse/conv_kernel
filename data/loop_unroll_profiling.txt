@@ -1,0 +1,21 @@
+All test cases passed
+Test batch size: 1000
+Loading fashion-mnist data...Done
+Loading model...Done
+Conv-GPU==
+==PROF== Profiling "prefn_marker_kernel()" - 5: 0%....50%....100% - 73 passes
+==PROF== Profiling "conv_forward_kernel" - 6: 0%....50%....100% - 74 passes
+==PROF== Profiling "do_not_remove_this_kernel()" - 7: 0%....50%....100% - 73 passes
+Layer Time: 3512.22 ms
+Op Time: 3441.84 ms
+Conv-GPU==
+==PROF== Profiling "prefn_marker_kernel()" - 8: 0%....50%....100% - 73 passes
+==PROF== Profiling "conv_forward_kernel" - 9: 0%....50%....100% - 74 passes
+==PROF== Profiling "do_not_remove_this_kernel()" - 10: 0%....50%....100% - 73 passes
+Layer Time: 4837.4 ms
+Op Time: 4789.38 ms
+
+Test Accuracy: 0.886
+
+==PROF== Disconnected from process 557
+==PROF== Report: /build/analysis_file.ncu-rep
