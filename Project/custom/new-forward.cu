@@ -1,18 +1,22 @@
 #include <cmath>
 #include <iostream>
+#include <cuda_fp16.h>
 #include "gpu-new-forward.h"
+
 
 
 #define IMPL_BASELINE               0
 #define IMPL_UNROLLING              1
 #define IMPL_SHARED_UNROLLING       2
 #define IMPL_LOOP_UNROLL            3
+#define IMPL_FP16                   4
 
 
 #define CUR_VERSION  IMPL_LOOP_UNROLL
 
 #define IS_TEST_1(B,M,C,H,W,K,S)  (B==1 && M == 3 && C == 3 && H == 224 && W == 224 && K == 3 && S == 1)
-#if(CUR_VERSION == IMPL_LOOP_UNROLL)
+
+#if(CUR_VERSION == IMPL_LOOP_UNROLL || CUR_VERSION == IMPL_FP16)
 
 #define BLOCK_SIZE 12
 
@@ -21,6 +25,7 @@
 #define BLOCK_SIZE 16
 
 #endif 
+
 #if (CUR_VERSION == IMPL_BASELINE)
 
 /**
@@ -506,7 +511,204 @@ __global__ void conv_forward_kernel(float* __restrict__ output, const float* __r
     #undef mask_4d
 }
 
-#endif 
+#elif (CUR_VERSION == IMPL_FP16)
+
+__global__ void float_to_half(half *output, const float *input, const int size) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = i * blockDim.y + j;
+    if(x < size)
+        output[x] = __float2half(input[x]);
+}
+
+/**
+ *  const int H_out = (H - K)/S + 1;
+ *  const int W_out = (W - K)/S + 1;
+    dim3 dimGrid(ceil(W_out/float(BLOCK_SIZE)), ceil(H_out/float(BLOCK_SIZE)), M * B);
+ *  dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE, 1);
+ * It means for each image and each feature map, we have a grid of blocks. since we have strides, 
+ * we divide works after strides into different blocks.
+*/
+__global__ void conv_forward_kernel(float* __restrict__ output, const half* __restrict__ input, 
+    const half * __restrict__ mask, 
+    const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
+    /*
+    Modify this function to implement the forward pass described in Chapter 16.
+    We have added an additional dimension to the tensors to support an entire mini-batch
+    The goal here is to be correct AND fast.
+
+    Function paramter definitions:
+    output - output
+    input - input
+    mask - convolution kernel
+    B - batch_size (number of images in x)
+    M - number of output feature maps
+    C - number of input feature maps
+    H - input height dimension
+    W - input width dimension
+    K - kernel height and width (K x K)
+    S - stride step length
+    */
+
+
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+
+
+    // We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
+    // An example use of these macros:
+    // float a = in_4d(0,0,0,0)
+    // out_4d(0,0,0,0) = a
+
+    #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+    #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+    // Insert your GPU convolution kernel code here
+
+    // pick a way to divide work for image and feature map
+    int b = blockIdx.x % B;
+    int m = blockIdx.y % M;
+
+    int bx = blockIdx.x / B;
+    int by = blockIdx.y / M;
+
+    int w = bx * blockDim.x + threadIdx.x;
+    int h = by * blockDim.y + threadIdx.y;
+
+    // load to shared memory will be useless if stride size is big.
+    // so we directly use global memory
+
+    half sum = 0.0f;
+    if(K == 1) {
+        // unroll the loop
+        for (int c = 0; c < C; c++) {
+            if (h * S < H && w * S < W) {
+                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0);
+            }
+        }
+
+    } else if(K == 2) {
+        // unroll the loop
+        for (int c = 0; c < C; c++) {
+            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1);
+        }
+    } else if(K == 3) {
+        // unroll the loop
+        for (int c = 0; c < C; c++) {
+            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
+                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
+                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
+                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
+                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
+                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2);
+        }
+
+    } else if(K == 4) {
+        // unroll the loop
+        for (int c = 0; c < C; c++) {
+            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
+                in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) + 
+                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
+                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
+                in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) + 
+                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
+                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
+                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) + 
+                in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
+                in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
+                in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
+                in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
+                in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3);
+        }
+    }else if(K == 7) {
+        // unroll the loop
+        for (int c = 0; c < C; c++) {
+            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) +
+                in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) +
+                in_4d(b, c, h * S, w * S + 4) * mask_4d(m, c, 0, 4) +
+                in_4d(b, c, h * S, w * S + 5) * mask_4d(m, c, 0, 5) +
+                in_4d(b, c, h * S, w * S + 6) * mask_4d(m, c, 0, 6) +
+                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) +
+                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) +
+                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) +
+                in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) +
+                in_4d(b, c, h * S + 1, w * S + 4) * mask_4d(m, c, 1, 4) +
+                in_4d(b, c, h * S + 1, w * S + 5) * mask_4d(m, c, 1, 5) +
+                in_4d(b, c, h * S + 1, w * S + 6) * mask_4d(m, c, 1, 6) +
+                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) +
+                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) +
+                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) +
+                in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
+                in_4d(b, c, h * S + 2, w * S + 4) * mask_4d(m, c, 2, 4) +
+                in_4d(b, c, h * S + 2, w * S + 5) * mask_4d(m, c, 2, 5) +
+                in_4d(b, c, h * S + 2, w * S + 6) * mask_4d(m, c, 2, 6) +
+                in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
+                in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
+                in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
+                in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3) +
+                in_4d(b, c, h * S + 3, w * S + 4) * mask_4d(m, c, 3, 4) +
+                in_4d(b, c, h * S + 3, w * S + 5) * mask_4d(m, c, 3, 5) +
+                in_4d(b, c, h * S + 3, w * S + 6) * mask_4d(m, c, 3, 6) +
+                in_4d(b, c, h * S + 4, w * S) * mask_4d(m, c, 4, 0) +
+                in_4d(b, c, h * S + 4, w * S + 1) * mask_4d(m, c, 4, 1) +
+                in_4d(b, c, h * S + 4, w * S + 2) * mask_4d(m, c, 4, 2) +
+                in_4d(b, c, h * S + 4, w * S + 3) * mask_4d(m, c, 4, 3) +
+                in_4d(b, c, h * S + 4, w * S + 4) * mask_4d(m, c, 4, 4) +
+                in_4d(b, c, h * S + 4, w * S + 5) * mask_4d(m, c, 4, 5) +
+                in_4d(b, c, h * S + 4, w * S + 6) * mask_4d(m, c, 4, 6) +
+                in_4d(b, c, h * S + 5, w * S) * mask_4d(m, c, 5, 0) +
+                in_4d(b, c, h * S + 5, w * S + 1) * mask_4d(m, c, 5, 1) +
+                in_4d(b, c, h * S + 5, w * S + 2) * mask_4d(m, c, 5, 2) +
+                in_4d(b, c, h * S + 5, w * S + 3) * mask_4d(m, c, 5, 3) +
+                in_4d(b, c, h * S + 5, w * S + 4) * mask_4d(m, c, 5, 4) +
+                in_4d(b, c, h * S + 5, w * S + 5) * mask_4d(m, c, 5, 5) +
+                in_4d(b, c, h * S + 5, w * S + 6) * mask_4d(m, c, 5, 6) +
+                in_4d(b, c, h * S + 6, w * S) * mask_4d(m, c, 6, 0) +
+                in_4d(b, c, h * S + 6, w * S + 1) * mask_4d(m, c, 6, 1) +
+                in_4d(b, c, h * S + 6, w * S + 2) * mask_4d(m, c, 6, 2) +
+                in_4d(b, c, h * S + 6, w * S + 3) * mask_4d(m, c, 6, 3) +
+                in_4d(b, c, h * S + 6, w * S + 4) * mask_4d(m, c, 6, 4) +
+                in_4d(b, c, h * S + 6, w * S + 5) * mask_4d(m, c, 6, 5) +
+                in_4d(b, c, h * S + 6, w * S + 6) * mask_4d(m, c, 6, 6);
+        }
+    }
+
+    else {
+
+        for (int c = 0; c < C; c++) {
+            for (int p = 0; p < K; p++) {
+                for (int q = 0; q < K; q++) {
+                    if (h * S + p < H && w * S + q < W) {
+                        sum += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
+                    }
+                }
+            }
+        }
+
+    }
+
+    if(h < H_out && w < W_out)
+        out_4d(b, m, h, w) = __half2float(sum);
+
+
+    #undef out_4d
+    #undef in_4d
+    #undef mask_4d
+}
+
+#endif
 
 
 
@@ -548,7 +750,7 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 
     // Set the kernel dimensions and call the kernel
 
-#if (CUR_VERSION == IMPL_BASELINE || CUR_VERSION == IMPL_LOOP_UNROLL)
+#if (CUR_VERSION == IMPL_BASELINE || CUR_VERSION == IMPL_LOOP_UNROLL || CUR_VERSION == IMPL_FP16)
 
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
@@ -631,24 +833,48 @@ const float *device_mask, const int B, const int M, const int C, const int H, co
     const int W_out = (W - K) / S + 1;
     // printf("%d %d\n", H_out, W_out);
 
-#if (CUR_VERSION == IMPL_BASELINE || CUR_VERSION == IMPL_LOOP_UNROLL) 
+#if (CUR_VERSION == IMPL_BASELINE || CUR_VERSION == IMPL_LOOP_UNROLL || CUR_VERSION == IMPL_FP16)
+
     dim3 dimGrid(ceil(1.0 * W_out/float(BLOCK_SIZE)) * B , ceil(1.0 * H_out/float(BLOCK_SIZE)) * M, 1);
     dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE, 1);
+
 #elif (CUR_VERSION == IMPL_SHARED_UNROLLING || CUR_VERSION == IMPL_UNROLLING)
 
     dim3 dimGrid(ceil(1.0 * H_out * W_out * B / BLOCK_SIZE), ceil(1.0 * M / BLOCK_SIZE), 1);
     dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE, 1);
 
-#endif 
-
+#endif
     // printf("%d %d %d\n", dimGrid.x, dimGrid.y, dimGrid.z);
     // printf("%d %d %d\n", dimBlock.x, dimBlock.y, dimBlock.z);
 
     // if(K==7) printf("hiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\n");
     // if( K<= 4 || K == 7)
+#if(CUR_VERSION == IMPL_FP16)
+
+    half *device_input_half;
+    half *device_mask_half;
+    cudaMalloc(&device_input_half, B * C * H * W * sizeof(half));
+    cudaMalloc(&device_mask_half, M * C * K * K * sizeof(half));
+
+    // cp from float to half
+    dim3 dimGrid_half(ceil(1.0 * H * W * B / BLOCK_SIZE), ceil(1.0 * M * C * K * K / BLOCK_SIZE), 1);
+    dim3 dimBlock_half(BLOCK_SIZE, BLOCK_SIZE, 1);
+    float_to_half<<<dimGrid_half, dimBlock_half>>>(device_input_half, device_input, B * C * H * W);
+    float_to_half<<<dimGrid_half, dimBlock_half>>>(device_mask_half, device_mask, M * C * K * K);
+
+    cudaDeviceSynchronize();
+
+    // call the kernel
+    conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input_half, 
+        device_mask_half, B, M, C, H, W, K, S);
+
+    cudaFree(device_input_half);
+    cudaFree(device_mask_half);
+    
+#else
     conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, 
         device_mask, B, M, C, H, W, K, S);
-
+#endif
     cudaDeviceSynchronize();
 
 }
