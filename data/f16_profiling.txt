@@ -1,0 +1,25 @@
+All test cases passed
+Test batch size: 1000
+Loading fashion-mnist data...Done
+Loading model...Done
+Conv-GPU==
+==PROF== Profiling "prefn_marker_kernel()" - 13: 0%....50%....100% - 73 passes
+==PROF== Profiling "float_to_half" - 14: 0%....50%....100% - 74 passes
+==PROF== Profiling "float_to_half" - 15: 0%....50%....100% - 73 passes
+==PROF== Profiling "conv_forward_kernel" - 16: 0%....50%....100% - 74 passes
+==PROF== Profiling "do_not_remove_this_kernel()" - 17: 0%....50%....100% - 73 passes
+Layer Time: 8119.25 ms
+Op Time: 8054.24 ms
+Conv-GPU==
+==PROF== Profiling "prefn_marker_kernel()" - 18: 0%....50%....100% - 73 passes
+==PROF== Profiling "float_to_half" - 19: 0%....50%....100% - 74 passes
+==PROF== Profiling "float_to_half" - 20: 0%....50%....100% - 73 passes
+==PROF== Profiling "conv_forward_kernel" - 21: 0%....50%....100% - 74 passes
+==PROF== Profiling "do_not_remove_this_kernel()" - 22: 0%....50%....100% - 73 passes
+Layer Time: 9334.11 ms
+Op Time: 9287.46 ms
+
+Test Accuracy: 0.887
+
+==PROF== Disconnected from process 558
+==PROF== Report: /build/analysis_file.ncu-rep

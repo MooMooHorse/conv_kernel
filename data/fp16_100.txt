@@ -1,0 +1,17 @@
+All test cases passed
+Test batch size: 100
+Loading fashion-mnist data...Done
+Loading model...Done
+Conv-GPU==
+Layer Time: 7.19751 ms
+Op Time: 0.238143 ms
+Conv-GPU==
+Layer Time: 5.83544 ms
+Op Time: 0.519883 ms
+
+Test Accuracy: 0.86
+
+
+real    0m1.786s
+user    0m1.403s
+sys     0m0.228s
