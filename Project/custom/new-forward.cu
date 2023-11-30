@@ -12,7 +12,7 @@
 #define IMPL_FP16                           4
 
 
-#define CUR_VERSION  IMPL_LOOP_UNROLL
+#define CUR_VERSION  IMPL_FP16
 
 #define IS_TEST_1(B,M,C,H,W,K,S)  (B==1 && M == 3 && C == 3 && H == 224 && W == 224 && K == 3 && S == 1)
 
@@ -584,7 +584,7 @@ __global__ void conv_forward_kernel(float* __restrict__ output, const float* __r
 __global__ void float_to_half(half *output, const float *input, const int size) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int x = i * blockDim.y + j;
+    int x = i * blockDim.y * gridDim.y + j;
     if(x < size)
         output[x] = __float2half(input[x]);
 }
@@ -647,128 +647,131 @@ __global__ void conv_forward_kernel(float* __restrict__ output, const half* __re
     // load to shared memory will be useless if stride size is big.
     // so we directly use global memory
 
-    half sum = 0.0f;
-    if(K == 1) {
-        // unroll the loop
-        for (int c = 0; c < C; c++) {
-            if (h * S < H && w * S < W) {
-                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0);
+    if(h < H_out && w < W_out) {
+        
+        half sum = 0.0f;
+        if(K == 1) {
+            // unroll the loop
+            for (int c = 0; c < C; c++) {
+                if (h * S < H && w * S < W) {
+                    sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0);
+                }
+            }
+
+        } else if(K == 2) {
+            // unroll the loop
+            for (int c = 0; c < C; c++) {
+                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                    in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                    in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                    in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1);
+            }
+        } else if(K == 3) {
+            // unroll the loop
+            for (int c = 0; c < C; c++) {
+                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                    in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                    in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
+                    in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                    in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
+                    in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
+                    in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
+                    in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
+                    in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2);
+            }
+
+        } else if(K == 4) {
+            // unroll the loop
+            for (int c = 0; c < C; c++) {
+                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                    in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                    in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
+                    in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) + 
+                    in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
+                    in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
+                    in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
+                    in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) + 
+                    in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
+                    in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
+                    in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) + 
+                    in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
+                    in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
+                    in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
+                    in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
+                    in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3);
+            }
+        }else if(K == 7) {
+            // unroll the loop
+            for (int c = 0; c < C; c++) {
+                sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
+                    in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
+                    in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) +
+                    in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) +
+                    in_4d(b, c, h * S, w * S + 4) * mask_4d(m, c, 0, 4) +
+                    in_4d(b, c, h * S, w * S + 5) * mask_4d(m, c, 0, 5) +
+                    in_4d(b, c, h * S, w * S + 6) * mask_4d(m, c, 0, 6) +
+                    in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) +
+                    in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) +
+                    in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) +
+                    in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) +
+                    in_4d(b, c, h * S + 1, w * S + 4) * mask_4d(m, c, 1, 4) +
+                    in_4d(b, c, h * S + 1, w * S + 5) * mask_4d(m, c, 1, 5) +
+                    in_4d(b, c, h * S + 1, w * S + 6) * mask_4d(m, c, 1, 6) +
+                    in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) +
+                    in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) +
+                    in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) +
+                    in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
+                    in_4d(b, c, h * S + 2, w * S + 4) * mask_4d(m, c, 2, 4) +
+                    in_4d(b, c, h * S + 2, w * S + 5) * mask_4d(m, c, 2, 5) +
+                    in_4d(b, c, h * S + 2, w * S + 6) * mask_4d(m, c, 2, 6) +
+                    in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
+                    in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
+                    in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
+                    in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3) +
+                    in_4d(b, c, h * S + 3, w * S + 4) * mask_4d(m, c, 3, 4) +
+                    in_4d(b, c, h * S + 3, w * S + 5) * mask_4d(m, c, 3, 5) +
+                    in_4d(b, c, h * S + 3, w * S + 6) * mask_4d(m, c, 3, 6) +
+                    in_4d(b, c, h * S + 4, w * S) * mask_4d(m, c, 4, 0) +
+                    in_4d(b, c, h * S + 4, w * S + 1) * mask_4d(m, c, 4, 1) +
+                    in_4d(b, c, h * S + 4, w * S + 2) * mask_4d(m, c, 4, 2) +
+                    in_4d(b, c, h * S + 4, w * S + 3) * mask_4d(m, c, 4, 3) +
+                    in_4d(b, c, h * S + 4, w * S + 4) * mask_4d(m, c, 4, 4) +
+                    in_4d(b, c, h * S + 4, w * S + 5) * mask_4d(m, c, 4, 5) +
+                    in_4d(b, c, h * S + 4, w * S + 6) * mask_4d(m, c, 4, 6) +
+                    in_4d(b, c, h * S + 5, w * S) * mask_4d(m, c, 5, 0) +
+                    in_4d(b, c, h * S + 5, w * S + 1) * mask_4d(m, c, 5, 1) +
+                    in_4d(b, c, h * S + 5, w * S + 2) * mask_4d(m, c, 5, 2) +
+                    in_4d(b, c, h * S + 5, w * S + 3) * mask_4d(m, c, 5, 3) +
+                    in_4d(b, c, h * S + 5, w * S + 4) * mask_4d(m, c, 5, 4) +
+                    in_4d(b, c, h * S + 5, w * S + 5) * mask_4d(m, c, 5, 5) +
+                    in_4d(b, c, h * S + 5, w * S + 6) * mask_4d(m, c, 5, 6) +
+                    in_4d(b, c, h * S + 6, w * S) * mask_4d(m, c, 6, 0) +
+                    in_4d(b, c, h * S + 6, w * S + 1) * mask_4d(m, c, 6, 1) +
+                    in_4d(b, c, h * S + 6, w * S + 2) * mask_4d(m, c, 6, 2) +
+                    in_4d(b, c, h * S + 6, w * S + 3) * mask_4d(m, c, 6, 3) +
+                    in_4d(b, c, h * S + 6, w * S + 4) * mask_4d(m, c, 6, 4) +
+                    in_4d(b, c, h * S + 6, w * S + 5) * mask_4d(m, c, 6, 5) +
+                    in_4d(b, c, h * S + 6, w * S + 6) * mask_4d(m, c, 6, 6);
             }
         }
 
-    } else if(K == 2) {
-        // unroll the loop
-        for (int c = 0; c < C; c++) {
-            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
-                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
-                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
-                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1);
-        }
-    } else if(K == 3) {
-        // unroll the loop
-        for (int c = 0; c < C; c++) {
-            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
-                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
-                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
-                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
-                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
-                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
-                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
-                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
-                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2);
-        }
+        else {
 
-    } else if(K == 4) {
-        // unroll the loop
-        for (int c = 0; c < C; c++) {
-            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
-                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
-                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) + 
-                in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) + 
-                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) + 
-                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) + 
-                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) + 
-                in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) + 
-                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) + 
-                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) + 
-                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) + 
-                in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
-                in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
-                in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
-                in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
-                in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3);
-        }
-    }else if(K == 7) {
-        // unroll the loop
-        for (int c = 0; c < C; c++) {
-            sum += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0) + 
-                in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1) + 
-                in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2) +
-                in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3) +
-                in_4d(b, c, h * S, w * S + 4) * mask_4d(m, c, 0, 4) +
-                in_4d(b, c, h * S, w * S + 5) * mask_4d(m, c, 0, 5) +
-                in_4d(b, c, h * S, w * S + 6) * mask_4d(m, c, 0, 6) +
-                in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0) +
-                in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1) +
-                in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2) +
-                in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3) +
-                in_4d(b, c, h * S + 1, w * S + 4) * mask_4d(m, c, 1, 4) +
-                in_4d(b, c, h * S + 1, w * S + 5) * mask_4d(m, c, 1, 5) +
-                in_4d(b, c, h * S + 1, w * S + 6) * mask_4d(m, c, 1, 6) +
-                in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0) +
-                in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1) +
-                in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2) +
-                in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3) +
-                in_4d(b, c, h * S + 2, w * S + 4) * mask_4d(m, c, 2, 4) +
-                in_4d(b, c, h * S + 2, w * S + 5) * mask_4d(m, c, 2, 5) +
-                in_4d(b, c, h * S + 2, w * S + 6) * mask_4d(m, c, 2, 6) +
-                in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0) +
-                in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1) +
-                in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2) +
-                in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3) +
-                in_4d(b, c, h * S + 3, w * S + 4) * mask_4d(m, c, 3, 4) +
-                in_4d(b, c, h * S + 3, w * S + 5) * mask_4d(m, c, 3, 5) +
-                in_4d(b, c, h * S + 3, w * S + 6) * mask_4d(m, c, 3, 6) +
-                in_4d(b, c, h * S + 4, w * S) * mask_4d(m, c, 4, 0) +
-                in_4d(b, c, h * S + 4, w * S + 1) * mask_4d(m, c, 4, 1) +
-                in_4d(b, c, h * S + 4, w * S + 2) * mask_4d(m, c, 4, 2) +
-                in_4d(b, c, h * S + 4, w * S + 3) * mask_4d(m, c, 4, 3) +
-                in_4d(b, c, h * S + 4, w * S + 4) * mask_4d(m, c, 4, 4) +
-                in_4d(b, c, h * S + 4, w * S + 5) * mask_4d(m, c, 4, 5) +
-                in_4d(b, c, h * S + 4, w * S + 6) * mask_4d(m, c, 4, 6) +
-                in_4d(b, c, h * S + 5, w * S) * mask_4d(m, c, 5, 0) +
-                in_4d(b, c, h * S + 5, w * S + 1) * mask_4d(m, c, 5, 1) +
-                in_4d(b, c, h * S + 5, w * S + 2) * mask_4d(m, c, 5, 2) +
-                in_4d(b, c, h * S + 5, w * S + 3) * mask_4d(m, c, 5, 3) +
-                in_4d(b, c, h * S + 5, w * S + 4) * mask_4d(m, c, 5, 4) +
-                in_4d(b, c, h * S + 5, w * S + 5) * mask_4d(m, c, 5, 5) +
-                in_4d(b, c, h * S + 5, w * S + 6) * mask_4d(m, c, 5, 6) +
-                in_4d(b, c, h * S + 6, w * S) * mask_4d(m, c, 6, 0) +
-                in_4d(b, c, h * S + 6, w * S + 1) * mask_4d(m, c, 6, 1) +
-                in_4d(b, c, h * S + 6, w * S + 2) * mask_4d(m, c, 6, 2) +
-                in_4d(b, c, h * S + 6, w * S + 3) * mask_4d(m, c, 6, 3) +
-                in_4d(b, c, h * S + 6, w * S + 4) * mask_4d(m, c, 6, 4) +
-                in_4d(b, c, h * S + 6, w * S + 5) * mask_4d(m, c, 6, 5) +
-                in_4d(b, c, h * S + 6, w * S + 6) * mask_4d(m, c, 6, 6);
-        }
-    }
-
-    else {
-
-        for (int c = 0; c < C; c++) {
-            for (int p = 0; p < K; p++) {
-                for (int q = 0; q < K; q++) {
-                    if (h * S + p < H && w * S + q < W) {
-                        sum += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
+            for (int c = 0; c < C; c++) {
+                for (int p = 0; p < K; p++) {
+                    for (int q = 0; q < K; q++) {
+                        if (h * S + p < H && w * S + q < W) {
+                            sum += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
+                        }
                     }
                 }
             }
+
         }
 
-    }
-
-    if(h < H_out && w < W_out)
         out_4d(b, m, h, w) = __half2float(sum);
+        
+    }
 
 
     #undef out_4d
@@ -925,10 +928,15 @@ const float *device_mask, const int B, const int M, const int C, const int H, co
     cudaMalloc(&device_mask_half, M * C * K * K * sizeof(half));
 
     // cp from float to half
-    dim3 dimGrid_half(ceil(1.0 * H * W * B / BLOCK_SIZE), ceil(1.0 * M * C * K * K / BLOCK_SIZE), 1);
+    dim3 dimGrid_half1(ceil(1.0 * H * W / BLOCK_SIZE), ceil(1.0 * B * C / BLOCK_SIZE), 1);
+
     dim3 dimBlock_half(BLOCK_SIZE, BLOCK_SIZE, 1);
-    float_to_half<<<dimGrid_half, dimBlock_half>>>(device_input_half, device_input, B * C * H * W);
-    float_to_half<<<dimGrid_half, dimBlock_half>>>(device_mask_half, device_mask, M * C * K * K);
+    
+    float_to_half<<<dimGrid_half1, dimBlock_half>>>(device_input_half, device_input, B * C * H * W);
+
+    dim3 dimGrid_half2(ceil(1.0 * M * C * K / BLOCK_SIZE), ceil(1.0 * K / BLOCK_SIZE), 1);
+
+    float_to_half<<<dimGrid_half2, dimBlock_half>>>(device_mask_half, device_mask, M * C * K * K);
 
     cudaDeviceSynchronize();
 

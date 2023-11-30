@@ -10,6 +10,10 @@ Op Time: 10.7237 ms
 
 Test Accuracy: 0.886
 
+real    0m10.029s
+user    0m9.700s
+sys     0m0.296s
+
         Generating the /build/report1.qdstrm file.
         Capturing raw events...
         75076 total events collected.

@@ -18,3 +18,8 @@ Layer Time: 281.044 ms
 Op Time: 52.9973 ms
 
 Test Accuracy: 0.871
+
+
+real    0m47.943s
+user    0m47.158s
+sys     0m0.740s
