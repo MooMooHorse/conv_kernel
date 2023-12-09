@@ -141,13 +141,6 @@ The GPU accelerated version breaks some outer loop to allow some parallel execut
 | 1000       | *2.24226 ms*  | *15.3607 ms* | *0m10.669s*          | *0.886*  |
 | 5000       | *11.5922 ms*  | *40.737 ms*  | *0m0.740s*           | *0.871*  |
 
-From Nsight Compute, we can draw the following conclusions:
-
-* Memory is under utilized
-
-![image-20231209131329387](/home/hao/moomoohorse.github.io/docs/assets/img/posts/nsight-compute1.png)
-
-![image-20231209131502389](/home/hao/moomoohorse.github.io/docs/assets/img/posts/nsight-compute2.png)
 
 ### Optimization 1 : `IMPL_INPUT_UNROLLING` Shared memory matrix multiplication and input matrix unrolling
 
